@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ApplyKit">
+<meta name="theme-color" content="#4f46e5">
+<title>ApplyKit</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --accent:#4f46e5; --ok:#059669; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#1a1d24; --ink:#f3f4f6; --muted:#9ca3af; --line:#2a2e38; --accent:#818cf8; --ok:#34d399; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.4 -apple-system,system-ui,sans-serif;
+         padding:max(16px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom)); }
+  main { max-width:480px; margin:0 auto; }
+  h1 { font-size:22px; margin:8px 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  .row { display:flex; gap:8px; align-items:stretch; margin-bottom:8px; }
+  .copy { flex:1; text-align:left; min-width:0; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+          border-radius:10px; padding:10px 12px; font:inherit; cursor:pointer; }
+  .copy small { display:block; color:var(--muted); font-size:12px; }
+  .copy span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .copy.done { border-color:var(--ok); }
+  .copy.done small { color:var(--ok); }
+  input { width:100%; font:inherit; font-size:16px; /* 16px stops iOS zoom */ padding:10px 12px; border-radius:10px;
+          border:1px solid var(--line); background:var(--bg); color:var(--ink); margin-bottom:8px; }
+  button.primary { width:100%; font:inherit; font-weight:600; background:var(--accent); color:#fff; border:0;
+                   border-radius:10px; padding:12px; cursor:pointer; }
+  button.ghost { background:none; border:0; color:var(--accent); font:inherit; padding:6px 0; cursor:pointer; }
+  .hint { font-size:13px; color:var(--muted); margin:8px 0 0; }
+  .ok { color:var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <h1>ApplyKit</h1>
+  <p class="sub">Tap a field to copy it, then paste into the application. Data stays on this device.</p>
+
+  <div class="card">
+    <h2>Copy</h2>
+    <div id="copyList"></div>
+    <p class="hint" id="emptyHint" hidden>Nothing saved yet — fill in the details below.</p>
+  </div>
+
+  <div class="card">
+    <h2>Clean a LinkedIn link</h2>
+    <input id="raw" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="Paste a LinkedIn share link">
+    <button class="primary" id="cleanBtn">Clean &amp; save as my LinkedIn</button>
+    <p class="hint" id="cleanMsg">In the LinkedIn app: your profile → ••• → Share → Copy link, then paste here.</p>
+  </div>
+
+  <div class="card">
+    <h2>My details</h2>
+    <div id="fields"></div>
+    <button class="primary" id="saveBtn">Save</button>
+    <p class="hint">Tip: in Chrome tap Share → Add to Home Screen to launch this like an app.</p>
+  </div>
+</main>
+
+<script>
+const FIELDS = [
+  { key:"linkedin",  label:"LinkedIn URL", type:"url" },
+  { key:"name",      label:"Full legal name" },
+  { key:"email",     label:"Email", type:"email" },
+  { key:"phone",     label:"Phone", type:"tel" },
+  { key:"github",    label:"GitHub / portfolio", type:"url" },
+];
+const STORE = "applykit.v1";
+
+const load = () => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } };
+const save = d => { try { localStorage.setItem(STORE, JSON.stringify(d)); } catch {} };
+
+// Reduce any LinkedIn profile link (share links, tracking params, mobile/country hosts) to the canonical form.
+function cleanLinkedIn(input) {
+  let s = (input || "").trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s;
+  let u; try { u = new URL(s); } catch { return null; }
+  if (!/(^|\.)linkedin\.com$/i.test(u.hostname)) return null;
+  const m = u.pathname.match(/^\/(?:in|pub)\/([^\/?#]+)/i);
+  if (!m) return null;
+  return "https://www.linkedin.com/in/" + m[1];
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  // Fallback for restricted contexts
+  const t = document.createElement("textarea");
+  t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+  document.body.appendChild(t); t.focus(); t.setSelectionRange(0, text.length);
+  let ok = false; try { ok = document.execCommand("copy"); } catch {}
+  t.remove(); return ok;
+}
+
+const data = load();
+const copyList = document.getElementById("copyList");
+const fieldsEl = document.getElementById("fields");
+
+function render() {
+  copyList.innerHTML = "";
+  let any = false;
+  for (const f of FIELDS) {
+    const v = data[f.key]; if (!v) continue; any = true;
+    const b = document.createElement("button");
+    b.className = "copy";
+    b.innerHTML = "<small></small><span></span>";
+    b.firstChild.textContent = f.label;
+    b.lastChild.textContent = v;
+    b.onclick = async () => {
+      const ok = await copyText(v);
+      b.classList.add("done"); b.firstChild.textContent = ok ? "Copied ✓" : "Copy failed — long-press the text";
+      setTimeout(() => { b.classList.remove("done"); b.firstChild.textContent = f.label; }, 1500);
+    };
+    const row = document.createElement("div"); row.className = "row"; row.appendChild(b);
+    copyList.appendChild(row);
+  }
+  document.getElementById("emptyHint").hidden = any;
+}
+
+for (const f of FIELDS) {
+  const i = document.createElement("input");
+  i.id = "f_" + f.key; i.placeholder = f.label; i.value = data[f.key] || "";
+  i.type = f.type === "url" ? "text" : (f.type || "text");
+  if (f.type === "url") i.inputMode = "url";
+  i.autocapitalize = "off"; i.autocorrect = "off";
+  fieldsEl.appendChild(i);
+}
+
+document.getElementById("saveBtn").onclick = () => {
+  for (const f of FIELDS) {
+    let v = document.getElementById("f_" + f.key).value.trim();
+    if (f.key === "linkedin") v = cleanLinkedIn(v) || v;
+    data[f.key] = v;
+    document.getElementById("f_" + f.key).value = v;
+  }
+  save(data); render();
+};
+
+document.getElementById("cleanBtn").onclick = async () => {
+  const msg = document.getElementById("cleanMsg");
+  const raw = document.getElementById("raw");
+  if (!raw.value.trim()) { try { raw.value = await navigator.clipboard.readText(); } catch {} }
+  const url = cleanLinkedIn(raw.value);
+  if (!url) { msg.className = "hint"; msg.textContent = "That doesn't look like a linkedin.com/in/… profile link."; return; }
+  data.linkedin = url; save(data);
+  document.getElementById("f_linkedin").value = url;
+  raw.value = ""; render();
+  await copyText(url);
+  msg.className = "hint ok"; msg.textContent = "Saved and copied: " + url;
+};
+
+render();
+</script>
+</body>
+</html>
